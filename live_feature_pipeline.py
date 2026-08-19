@@ -10,6 +10,7 @@ Run:
 """
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import requests
@@ -32,6 +33,7 @@ from feature_engineering import engineer_features
 # Need at least 48h of history in this pull so lag_48h can be computed
 # for the newest row, plus a little buffer.
 PAST_HOURS = 72
+REQUEST_TIMEOUT = (10, 45)
 
 
 def build_retry_session() -> requests.Session:
@@ -51,7 +53,7 @@ def build_retry_session() -> requests.Session:
     return session
 
 
-def fetch_air_quality_live(city: str, lat: float, lon: float) -> pd.DataFrame:
+def fetch_air_quality_live(city: str, lat: float, lon: float, session: requests.Session) -> pd.DataFrame:
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -60,7 +62,7 @@ def fetch_air_quality_live(city: str, lat: float, lon: float) -> pd.DataFrame:
         "forecast_days": 1,
         "timezone": "auto",
     }
-    r = build_retry_session().get(AIR_QUALITY_URL, params=params, timeout=45)
+    r = session.get(AIR_QUALITY_URL, params=params, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     data = r.json()["hourly"]
     df = pd.DataFrame(data)
@@ -69,7 +71,7 @@ def fetch_air_quality_live(city: str, lat: float, lon: float) -> pd.DataFrame:
     return df
 
 
-def fetch_weather_live(city: str, lat: float, lon: float) -> pd.DataFrame:
+def fetch_weather_live(city: str, lat: float, lon: float, session: requests.Session) -> pd.DataFrame:
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -78,7 +80,7 @@ def fetch_weather_live(city: str, lat: float, lon: float) -> pd.DataFrame:
         "forecast_days": 1,
         "timezone": "auto",
     }
-    r = build_retry_session().get(WEATHER_FORECAST_URL, params=params, timeout=45)
+    r = session.get(WEATHER_FORECAST_URL, params=params, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     data = r.json()["hourly"]
     df = pd.DataFrame(data)
@@ -87,9 +89,9 @@ def fetch_weather_live(city: str, lat: float, lon: float) -> pd.DataFrame:
     return df
 
 
-def fetch_city_live(city: str, lat: float, lon: float) -> pd.DataFrame:
-    aq = fetch_air_quality_live(city, lat, lon)
-    wx = fetch_weather_live(city, lat, lon)
+def fetch_city_live(city: str, lat: float, lon: float, session: requests.Session) -> pd.DataFrame:
+    aq = fetch_air_quality_live(city, lat, lon, session)
+    wx = fetch_weather_live(city, lat, lon, session)
     merged = pd.merge(aq, wx, on=["datetime", "city"], how="inner")
     return merged
 
@@ -114,14 +116,19 @@ def push_to_hopsworks(df: pd.DataFrame):
 
 def main():
     all_frames = []
-    for city, (lat, lon) in CITIES.items():
-        print(f"Fetching live data for {city}...")
-        try:
-            df = fetch_city_live(city, lat, lon)
-            all_frames.append(df)
-        except requests.RequestException as e:
-            print(f"  FAILED for {city}: {e}")
-        time.sleep(1)
+    session = build_retry_session()
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {
+            executor.submit(fetch_city_live, city, lat, lon, session): city
+            for city, (lat, lon) in CITIES.items()
+        }
+        for future in as_completed(futures):
+            city = futures[future]
+            print(f"Fetching live data for {city}...")
+            try:
+                all_frames.append(future.result())
+            except requests.RequestException as e:
+                print(f"  FAILED for {city}: {e}")
 
     if not all_frames:
         raise RuntimeError("No city data fetched successfully. Check API availability/network in runner.")
