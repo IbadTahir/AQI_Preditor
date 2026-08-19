@@ -13,6 +13,8 @@ import time
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from config import (
     CITIES,
@@ -32,6 +34,23 @@ from feature_engineering import engineer_features
 PAST_HOURS = 72
 
 
+def build_retry_session() -> requests.Session:
+    """Retry transient HTTP failures commonly seen in CI runners."""
+    session = requests.Session()
+    retry = Retry(
+        total=4,
+        connect=4,
+        read=4,
+        backoff_factor=1.0,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
 def fetch_air_quality_live(city: str, lat: float, lon: float) -> pd.DataFrame:
     params = {
         "latitude": lat,
@@ -41,7 +60,7 @@ def fetch_air_quality_live(city: str, lat: float, lon: float) -> pd.DataFrame:
         "forecast_days": 1,
         "timezone": "auto",
     }
-    r = requests.get(AIR_QUALITY_URL, params=params, timeout=30)
+    r = build_retry_session().get(AIR_QUALITY_URL, params=params, timeout=45)
     r.raise_for_status()
     data = r.json()["hourly"]
     df = pd.DataFrame(data)
@@ -59,7 +78,7 @@ def fetch_weather_live(city: str, lat: float, lon: float) -> pd.DataFrame:
         "forecast_days": 1,
         "timezone": "auto",
     }
-    r = requests.get(WEATHER_FORECAST_URL, params=params, timeout=30)
+    r = build_retry_session().get(WEATHER_FORECAST_URL, params=params, timeout=45)
     r.raise_for_status()
     data = r.json()["hourly"]
     df = pd.DataFrame(data)
@@ -100,9 +119,12 @@ def main():
         try:
             df = fetch_city_live(city, lat, lon)
             all_frames.append(df)
-        except requests.HTTPError as e:
+        except requests.RequestException as e:
             print(f"  FAILED for {city}: {e}")
         time.sleep(1)
+
+    if not all_frames:
+        raise RuntimeError("No city data fetched successfully. Check API availability/network in runner.")
 
     raw = pd.concat(all_frames, ignore_index=True)
     featured = engineer_features(raw)
