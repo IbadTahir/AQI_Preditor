@@ -18,7 +18,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import joblib
@@ -39,6 +39,7 @@ HORIZONS = [24, 48, 72]
 TARGET_COL = "us_aqi"
 MODEL_NAME = "aqi_forecast_random_forest"
 FEATURE_READ_ATTEMPTS = 3
+FEATURE_LOOKBACK_DAYS = 8
 
 
 @st.cache_resource(show_spinner=False)
@@ -63,7 +64,8 @@ def load_feature_data() -> pd.DataFrame:
         try:
             _, fs = connect_hopsworks()
             fg = fs.get_feature_group(name=FEATURE_GROUP_NAME, version=FEATURE_GROUP_VERSION)
-            df = fg.read()
+            start_time = datetime.utcnow() - timedelta(days=FEATURE_LOOKBACK_DAYS)
+            df = fg.read(start_time=start_time, dataframe_type="pandas")
             df["datetime"] = pd.to_datetime(df["datetime"])
             return df.sort_values(["city", "datetime"]).reset_index(drop=True)
         except Exception as exc:
