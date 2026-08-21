@@ -66,7 +66,13 @@ def load_feature_data() -> pd.DataFrame:
             fg = fs.get_feature_group(name=FEATURE_GROUP_NAME, version=FEATURE_GROUP_VERSION)
             start_time = datetime.utcnow() - timedelta(days=FEATURE_LOOKBACK_DAYS)
             df = fg.read(start_time=start_time, dataframe_type="pandas")
+            if df.empty:
+                # A stale event-time or timezone mismatch can make a recent
+                # query empty even though the feature group contains data.
+                df = fg.read(dataframe_type="pandas")
             df["datetime"] = pd.to_datetime(df["datetime"])
+            if df.empty:
+                raise RuntimeError("Feature group read returned no rows.")
             return df.sort_values(["city", "datetime"]).reset_index(drop=True)
         except Exception as exc:
             last_error = exc
