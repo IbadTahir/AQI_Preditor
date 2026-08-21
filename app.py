@@ -40,7 +40,7 @@ MODEL_CANDIDATES = [
     "aqi_forecast_random_forest",
 ]
 MODEL_NAME = "aqi_forecast_random_forest"
-MODEL_VERSION = 2
+MODEL_VERSION = 3
 
 
 @st.cache_resource(show_spinner=False)
