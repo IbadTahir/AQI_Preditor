@@ -6,6 +6,10 @@ always line up.
 
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # City -> (lat, lon), pulled from your existing dataset
 CITIES = {
     "Karachi":    (24.8607, 67.0011),
