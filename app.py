@@ -47,6 +47,12 @@ MODEL_VERSION = 3
 def connect_hopsworks():
     import hopsworks
 
+    if not HOPSWORKS_API_KEY:
+        raise RuntimeError(
+            "HOPSWORKS_API_KEY is not loaded in this terminal. "
+            "Set it in the same PowerShell window used to launch app.py."
+        )
+
     project = hopsworks.login(project=HOPSWORKS_PROJECT_NAME, api_key_value=HOPSWORKS_API_KEY)
     fs = project.get_feature_store()
     return project, fs
