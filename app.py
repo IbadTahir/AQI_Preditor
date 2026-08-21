@@ -39,7 +39,7 @@ HORIZONS = [24, 48, 72]
 TARGET_COL = "us_aqi"
 MODEL_NAME = "aqi_forecast_random_forest"
 FEATURE_READ_ATTEMPTS = 3
-FEATURE_LOOKBACK_DAYS = 8
+FEATURE_LOOKBACK_DAYS = 30
 
 
 @st.cache_resource(show_spinner=False)
