@@ -50,7 +50,16 @@ def load_data(fs) -> pd.DataFrame:
     fg = fs.get_feature_group(name=FEATURE_GROUP_NAME, version=FEATURE_GROUP_VERSION)
     df = fg.read()
     df["datetime"] = pd.to_datetime(df["datetime"])
-    return df.sort_values(["city", "datetime"]).reset_index(drop=True)
+    df = (
+        df.sort_values(["city", "datetime"])
+        .drop_duplicates(subset=["city", "datetime"], keep="last")
+        .reset_index(drop=True)
+    )
+    print(f"Training data range: {df['datetime'].min()} to {df['datetime'].max()}")
+    print(f"Cities: {df['city'].nunique()} | Unique city/timestamp rows: {len(df)}")
+    print("Rows by city:")
+    print(df.groupby("city")["datetime"].agg(["min", "max", "count"]).to_string())
+    return df
 
 
 def build_targets(df: pd.DataFrame) -> pd.DataFrame:
