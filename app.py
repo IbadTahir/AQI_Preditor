@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -36,11 +37,8 @@ from config import (
 
 HORIZONS = [24, 48, 72]
 TARGET_COL = "us_aqi"
-MODEL_CANDIDATES = [
-    "aqi_forecast_random_forest",
-]
 MODEL_NAME = "aqi_forecast_random_forest"
-MODEL_VERSION = 3
+FEATURE_READ_ATTEMPTS = 3
 
 
 @st.cache_resource(show_spinner=False)
@@ -58,55 +56,44 @@ def connect_hopsworks():
     return project, fs
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_feature_data() -> pd.DataFrame:
-    _, fs = connect_hopsworks()
-    fg = fs.get_feature_group(name=FEATURE_GROUP_NAME, version=FEATURE_GROUP_VERSION)
-    df = fg.read()
-    df["datetime"] = pd.to_datetime(df["datetime"])
-    return df.sort_values(["city", "datetime"]).reset_index(drop=True)
+    last_error = None
+    for attempt in range(1, FEATURE_READ_ATTEMPTS + 1):
+        try:
+            _, fs = connect_hopsworks()
+            fg = fs.get_feature_group(name=FEATURE_GROUP_NAME, version=FEATURE_GROUP_VERSION)
+            df = fg.read()
+            df["datetime"] = pd.to_datetime(df["datetime"])
+            return df.sort_values(["city", "datetime"]).reset_index(drop=True)
+        except Exception as exc:
+            last_error = exc
+            if attempt < FEATURE_READ_ATTEMPTS:
+                connect_hopsworks.clear()
+                time.sleep(2 ** attempt)
+
+    raise RuntimeError(
+        "Could not read data using Hopsworks Query Service after "
+        f"{FEATURE_READ_ATTEMPTS} attempts: {last_error}"
+    ) from last_error
 
 
 def _best_registered_model(project, model_name: str):
-    """Get the confirmed model version from the Hopsworks registry."""
+    """Get the newest version of the confirmed model from the registry."""
     mr = project.get_model_registry()
-    model_ref = mr.get_model(name=model_name, version=MODEL_VERSION)
-    if model_ref is None:
-        raise RuntimeError(f"Model '{model_name}' version {MODEL_VERSION} was not found.")
-    return model_ref
+    versions = mr.get_models(name=model_name)
+    if not versions:
+        raise RuntimeError(f"No registered versions found for '{model_name}'.")
+    return max(versions, key=lambda model_ref: int(model_ref.version))
 
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(ttl=3600, show_spinner=False)
 def load_best_model_assets():
     project, _ = connect_hopsworks()
 
-    # Prefer latest model trained by Phase 3 by comparing avg_rmse metadata
-    # when available; otherwise fall back to first downloadable candidate.
-    best = None
-    registry_errors = []
+    model_ref = _best_registered_model(project, MODEL_NAME)
 
-    for name in MODEL_CANDIDATES:
-        try:
-            model_ref = _best_registered_model(project, name)
-            candidate = {
-                "name": name,
-                "model_ref": model_ref,
-            }
-
-            if best is None:
-                best = candidate
-        except Exception as exc:
-            registry_errors.append(f"{name}: {exc}")
-            continue
-
-    if best is None:
-        raise RuntimeError(
-            "No registered model could be downloaded. "
-            "Expected one of: " + ", ".join(MODEL_CANDIDATES) + ". "
-            "Registry details: " + " | ".join(registry_errors)
-        )
-
-    model_dir = Path(best["model_ref"].download())
+    model_dir = Path(model_ref.download())
     feature_names_path = model_dir / "feature_names.pkl"
     if not feature_names_path.exists():
         raise RuntimeError(f"feature_names.pkl not found in {model_dir}")
@@ -134,7 +121,7 @@ def load_best_model_assets():
         "model_type": model_type,
         "scaler": scaler,
         "feature_names": feature_names,
-        "model_name": best["name"],
+        "model_name": f"{model_ref.name} v{model_ref.version}",
     }
 
 
