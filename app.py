@@ -206,7 +206,14 @@ def main():
         st.error(f"No feature rows found for {selected_city} in feature group.")
         return
 
-    latest = city_df.iloc[-1]
+    prediction_rows = city_df.dropna(
+        subset=[TARGET_COL, "aqi_lag_24h", "aqi_lag_48h"]
+    )
+    if prediction_rows.empty:
+        st.error(f"No complete prediction row found for {selected_city}.")
+        return
+
+    latest = prediction_rows.iloc[-1]
     current_aqi = float(latest[TARGET_COL])
     current_time = pd.to_datetime(latest["datetime"])
 
