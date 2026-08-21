@@ -1,6 +1,7 @@
 pandas
 requests
 hopsworks
+confluent-kafka
 streamlit
 plotly
 numpy
