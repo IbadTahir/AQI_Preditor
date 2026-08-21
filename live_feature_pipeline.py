@@ -34,6 +34,7 @@ from feature_engineering import engineer_features
 # for the newest row, plus a little buffer.
 PAST_HOURS = 72
 REQUEST_TIMEOUT = (10, 45)
+HOPSWORKS_INSERT_ATTEMPTS = 3
 
 
 def build_retry_session() -> requests.Session:
@@ -99,19 +100,28 @@ def fetch_city_live(city: str, lat: float, lon: float, session: requests.Session
 def push_to_hopsworks(df: pd.DataFrame):
     import hopsworks
 
-    project = hopsworks.login(project=HOPSWORKS_PROJECT_NAME, api_key_value=HOPSWORKS_API_KEY)
-    fs = project.get_feature_store()
+    for attempt in range(1, HOPSWORKS_INSERT_ATTEMPTS + 1):
+        try:
+            project = hopsworks.login(project=HOPSWORKS_PROJECT_NAME, api_key_value=HOPSWORKS_API_KEY)
+            fs = project.get_feature_store()
 
-    fg = fs.get_or_create_feature_group(
-        name=FEATURE_GROUP_NAME,
-        version=FEATURE_GROUP_VERSION,
-        description="Hourly AQI + weather features per city (Open-Meteo)",
-        primary_key=["city", "datetime"],
-        event_time="datetime",
-        online_enabled=False,
-        time_travel_format="HUDI",
-    )
-    fg.insert(df, write_options={"wait_for_job": True})
+            fg = fs.get_or_create_feature_group(
+                name=FEATURE_GROUP_NAME,
+                version=FEATURE_GROUP_VERSION,
+                description="Hourly AQI + weather features per city (Open-Meteo)",
+                primary_key=["city", "datetime"],
+                event_time="datetime",
+                online_enabled=False,
+                time_travel_format="HUDI",
+            )
+            fg.insert(df, write_options={"wait_for_job": True})
+            return
+        except (requests.RequestException, ConnectionError) as exc:
+            if attempt == HOPSWORKS_INSERT_ATTEMPTS:
+                raise
+            delay = 2 ** attempt
+            print(f"Hopsworks insert attempt {attempt} failed: {exc}. Retrying in {delay}s...")
+            time.sleep(delay)
 
 
 def main():
